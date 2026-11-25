@@ -24,10 +24,12 @@ jobs:
           objdump -f AltSnap.exe hooks.dll
           mkdir -p dist
           cp AltSnap.exe hooks.dll dist/
-          for f in AltSnap.ini License.txt LICENSE README.md RDP-DEBUG.md; do
+          for f in AltSnap.dni AltSnap.txt AltSnap.xml License.txt README.md RDP-DEBUG.md; do
             if [ -f "$f" ]; then cp "$f" dist/; fi
           done
           if [ -d Lang ]; then cp -r Lang dist/; fi
+          if [ -d Themes ]; then cp -r Themes dist/; fi
+          cp AltSnap.dni dist/AltSnap.ini
 
           printf '%s\n' "$GITHUB_SHA" > dist/commit.txt
       - uses: actions/upload-artifact@v4
