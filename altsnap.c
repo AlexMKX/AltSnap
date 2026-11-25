@@ -12,6 +12,32 @@
 static HINSTANCE g_hinst = NULL;
 static HWND g_hwnd = NULL;
 static UINT WM_TASKBARCREATED = 0;
+#define DIAG_WTS_MESSAGE 0x02B1
+#define DIAG_TIMER 0x5244
+static HMODULE diag_wts;
+static BOOL diag_wts_registered;
+static void DiagRegister(HWND hwnd)
+{
+    typedef BOOL (WINAPI *register_t)(HWND, DWORD);
+    diag_wts = LoadLibrary(TEXT("wtsapi32.dll"));
+    if (diag_wts) {
+        register_t reg = (register_t)GetProcAddress(diag_wts, "WTSRegisterSessionNotification");
+        if (reg) diag_wts_registered = reg(hwnd, 0);
+    }
+    LOG("RDP tick=%lu WTS registered=%d error=%lu", GetTickCount(), diag_wts_registered, GetLastError());
+    SetTimer(hwnd, DIAG_TIMER, 2000, NULL);
+}
+static void DiagUnregister(HWND hwnd)
+{
+    typedef BOOL (WINAPI *unregister_t)(HWND);
+    KillTimer(hwnd, DIAG_TIMER);
+    if (diag_wts) {
+        unregister_t unreg = (unregister_t)GetProcAddress(diag_wts, "WTSUnRegisterSessionNotification");
+        if (diag_wts_registered && unreg) unreg(hwnd);
+        FreeLibrary(diag_wts);
+        diag_wts = NULL;
+    }
+}
 static TCHAR inipath[MAX_PATH];
 
 static WNDPROC G_HotKeyProc = NULL;
@@ -88,6 +114,8 @@ static int HookSystem()
         }
         // Set up the keyboard hook
         keyhook = SetWindowsHookEx(WH_KEYBOARD_LL, procaddr, hinstDLL, 0);
+        DWORD hook_error = keyhook ? 0 : GetLastError();
+        LOG("RDP tick=%lu keyboard install=%d error=%lu", GetTickCount(), !!keyhook, hook_error);
         if (keyhook == NULL) {
             LOG("Keyboard HOOK could not be set");
             return 1;
@@ -109,7 +137,11 @@ static int UnhookSystem()
     LOG("Going to UnHook the system...");
     if (!keyhook) { // System not hooked
         return 1;
-    } else if (!UnhookWindowsHookEx(keyhook) && showerror) {
+    } 
+    BOOL unhook_ok = UnhookWindowsHookEx(keyhook);
+    DWORD hook_error = unhook_ok ? 0 : GetLastError();
+    LOG("RDP tick=%lu keyboard remove=%d error=%lu", GetTickCount(), unhook_ok, hook_error);
+    if (!unhook_ok && showerror) {
         MessageBox(NULL, l10n->MiscUnhookError, TEXT(APP_NAMEA),
                    MB_ICONINFORMATION|MB_OK|MB_TOPMOST|MB_SETFOREGROUND);
     }
@@ -291,7 +323,16 @@ static void ShowUnikeyMenu(HWND hwnd, LPARAM param)
 /////////////////////////////////////////////////////////////////////////////
 static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    if (!msg) {
+    if (msg == DIAG_WTS_MESSAGE || (msg == WM_TIMER && wParam == DIAG_TIMER)) {
+        if (msg == DIAG_WTS_MESSAGE)
+            LOG("RDP tick=%lu WTS event=%u session=%u", GetTickCount(), (unsigned)wParam, (unsigned)lParam);
+        LOG("RDP tick=%lu keyboard_hook=%d", GetTickCount(), !!keyhook);
+        if (hinstDLL) {
+            void (WINAPI *snapshot)(void) = (void (WINAPI *)(void))GetProcAddress(hinstDLL, "RdpDiagSnapshot");
+            if (snapshot) snapshot();
+        }
+        return 0;
+    } else if (!msg) {
         // In case some messages are not registered.
     } else if(wParam && msg == WM_ERASEBKGND) {
         return 1;
@@ -391,6 +432,7 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         showerror = 0;
         UnhookSystem();
     } else if (msg == WM_DESTROY) {
+        DiagUnregister(hwnd);
         UnhookSystem();
         RemoveTray();
         PostQuitMessage(0);
@@ -570,6 +612,7 @@ int WINAPI tWinMain(HINSTANCE hInst, HINSTANCE hPrevInstance, TCHAR *params, int
                             , wnd.lpszClassName , NULL , WS_POPUP
                             , 0, 0, 0, 0, NULL, NULL, hInst, NULL);
     LOG("Create main APP Window: %s", g_hwnd? "Sucess": "Failed");
+    if (g_hwnd) DiagRegister(g_hwnd);
     if (elevated) {
         // AltSnap was started elevated!
         // Allow some messages to be sent from non-elevated instance
