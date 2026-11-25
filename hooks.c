@@ -6423,7 +6423,7 @@ static void readblacklist(const TCHAR *section, blacklist_t *blacklist, const ch
         }
 
         // Store item
-        LOG( "%ls:%ls|%ls", exenm, title, klass);
+        // Do not log blacklist strings: TCHAR is narrow in the standard build.
         blacklist->items[blacklist->length].exename = exenm;
         blacklist->items[blacklist->length].title = title;
         blacklist->items[blacklist->length].classname = klass;
@@ -6806,7 +6806,9 @@ __declspec(dllexport) WNDPROC WINAPI Load(HWND mainhwnd, const TCHAR *inipath)
     readallinputSequences(inisection);
 
     // Read all the BLACKLITSTS
+    LOG("RDP loading blacklists");
     readallblacklists(inipath);
+    LOG("RDP blacklists loaded");
 
     ResetDB(); // Zero database of restore info (snap.c)
 
