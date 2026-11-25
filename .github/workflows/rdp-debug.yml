@@ -37,3 +37,22 @@ jobs:
           name: AltSnap-x64-RDP-debug
           path: dist/
           if-no-files-found: error
+      - name: Smoke test executable startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = (Resolve-Path dist).Path
+          $p = Start-Process -FilePath (Join-Path $dir 'AltSnap.exe') -WorkingDirectory $dir -PassThru
+          try {
+            if ($p.WaitForExit(5000)) {
+              throw ('AltSnap exited early: 0x{0:X8}' -f $p.ExitCode)
+            }
+            if (!(Test-Path (Join-Path $dir 'ad.log'))) {
+              throw 'No startup log was created'
+            }
+          } finally {
+            if (Test-Path (Join-Path $dir 'ad.log')) {
+              Get-Content (Join-Path $dir 'ad.log') -Tail 60
+            }
+            if (!$p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
