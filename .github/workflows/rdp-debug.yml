@@ -1,0 +1,37 @@
+name: AltSnap x64 RDP debug
+on:
+  push:
+    branches: ['debug/rdp-reconnect']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: make mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+      - name: Build debug binaries
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          gcc --version
+          make -f MakefileX64db
+          objdump -f AltSnap.exe hooks.dll
+          mkdir -p dist
+          cp AltSnap.exe hooks.dll dist/
+          for f in AltSnap.ini License.txt LICENSE README.md RDP-DEBUG.md; do
+            if [ -f "$f" ]; then cp "$f" dist/; fi
+          done
+          if [ -d Lang ]; then cp -r Lang dist/; fi
+          if [ -d lang ]; then cp -r lang dist/; fi
+          git rev-parse HEAD > dist/commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AltSnap-x64-RDP-debug
+          path: dist/
+          if-no-files-found: error
