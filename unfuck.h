@@ -271,14 +271,17 @@ static void LOGfunk( const char *fmt, ... )
     HANDLE h;
 
     va_start( arglist, fmt );
-    wvsprintfA( str, fmt, arglist );
+    _vsnprintf(str, sizeof(str) - 1, fmt, arglist);
+    str[sizeof(str) - 1] = '\0';
     va_end( arglist );
 
     h = CreateFileA( "ad.log",
         FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-    if( h == INVALID_HANDLE_VALUE )
+    if( h == INVALID_HANDLE_VALUE ) {
+        SetLastError(lerr);
         return;
+    }
     {
     char lerrorstr[16];
     DWORD dummy;
@@ -287,7 +290,7 @@ static void LOGfunk( const char *fmt, ... )
     lstrcat_sA(str, ARR_SZ(str), ")\n");
     WriteFile( h, str, lstrlenA(str), &dummy, NULL );
     CloseHandle(h);
-    SetLastError(0);
+    SetLastError(lerr);
     }
 }
 #ifdef LOG_STUFF
