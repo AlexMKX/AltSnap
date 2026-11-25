@@ -32,11 +32,6 @@ jobs:
           cp AltSnap.dni dist/AltSnap.ini
 
           printf '%s\n' "$GITHUB_SHA" > dist/commit.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: AltSnap-x64-RDP-debug
-          path: dist/
-          if-no-files-found: error
       - name: Smoke test executable startup
         shell: pwsh
         run: |
@@ -47,12 +42,21 @@ jobs:
             if ($p.WaitForExit(5000)) {
               throw ('AltSnap exited early: 0x{0:X8}' -f $p.ExitCode)
             }
-            if (!(Test-Path (Join-Path $dir 'ad.log'))) {
-              throw 'No startup log was created'
+            $log = Join-Path $dir 'ad.log'
+            if (!(Test-Path $log)) { throw 'No startup log was created' }
+            $contents = Get-Content $log -Raw
+            if ($contents -notmatch 'Starting AltSnap message loop' -or $contents -notmatch 'RDP tick=.*keyboard_hook=') {
+              throw 'Startup did not reach the message loop and diagnostic timer'
             }
           } finally {
             if (Test-Path (Join-Path $dir 'ad.log')) {
               Get-Content (Join-Path $dir 'ad.log') -Tail 60
             }
             if (!$p.HasExited) { Stop-Process -Id $p.Id -Force }
+            Remove-Item (Join-Path $dir 'ad.log') -ErrorAction SilentlyContinue
           }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AltSnap-x64-RDP-debug
+          path: dist/
+          if-no-files-found: error
