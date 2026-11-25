@@ -477,7 +477,7 @@ int WINAPI tWinMain(HINSTANCE hInst, HINSTANCE hPrevInstance, TCHAR *params, int
         lstrcat_s(userini, ARR_SZ(userini), TEXT("\\AltSnap"));
         if (INVALID_FILE_ATTRIBUTES == GetFileAttributes(userini)) {
             CreateDirectory(userini, NULL);
-            LOG("CreateDirectory(%S)", userini);
+            LOG("CreateDirectory for user configuration");
         }
         // Full user ini name.
         //lstrcat_s(userini, ARR_SZ(userini), TEXT("\\AltSnap.ini"));
@@ -488,12 +488,12 @@ int WINAPI tWinMain(HINSTANCE hInst, HINSTANCE hPrevInstance, TCHAR *params, int
             // Copy AltSnap.dni (Default ini file) if no ini present
             lstrcpy_s(&inipath[lstrlen(inipath)-3], 4, TEXT("dni"));
             CopyFile(inipath, userini, FALSE); // AltSnap.dni -> AltSnap.ini
-            LOG("CopyFile(%S -> %S)", inipath, userini);
+            LOG("Copy default configuration");
         }
 
         lstrcpy_s(inipath, ARR_SZ(inipath), userini);
     }
-    LOG("ini file: %S", inipath);
+    LOG("INI path selected");
 
     // Read parameters on command line
     int help    = !!lstrstr(params, TEXT("-help"))
