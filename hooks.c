@@ -432,6 +432,59 @@ HWND g_mainhwnd = NULL;
 HINSTANCE hinstDLL = NULL;
 HHOOK mousehook = NULL;
 
+// RDP diagnostics: counters only, no key codes or coordinates.
+static DWORD diag_kb_count, diag_mouse_count, diag_kb_max, diag_mouse_max;
+static DWORD diag_alt_on, diag_alt_off, diag_mouse_install, diag_mouse_remove;
+static DWORD diag_install_error, diag_remove_error, diag_rehook;
+static DWORD diag_hook_thread, diag_depth;
+#ifdef LOG_STUFF
+#undef LOG
+// Existing debug log messages reached from hook callbacks must not do file I/O.
+#define LOG(...) do { if (!diag_depth || GetCurrentThreadId() != diag_hook_thread) LOGfunk(__VA_ARGS__); } while (0)
+#endif
+static void DiagHookEnter(void)
+{
+    if (!diag_depth) diag_hook_thread = GetCurrentThreadId();
+    ++diag_depth;
+}
+static void DiagHookLeave(DWORD start, int was_alt, DWORD *count, DWORD *maximum)
+{
+    DWORD elapsed = GetTickCount() - start;
+    ++*count;
+    if (elapsed > *maximum) *maximum = elapsed;
+    if (!was_alt && state.alt) ++diag_alt_on;
+    if (was_alt && !state.alt) ++diag_alt_off;
+    --diag_depth;
+}
+__declspec(dllexport) void WINAPI RdpDiagSnapshot(void)
+{
+    LOG("RDP tick=%lu kb=%lu mouse=%lu kb_max_ms=%lu mouse_max_ms=%lu alt=%d alt_on=%lu alt_off=%lu ignorekey=%d ignoreclick=%d action=%d mousehook=%d keep=%d",
+        GetTickCount(), diag_kb_count, diag_mouse_count, diag_kb_max, diag_mouse_max,
+        !!state.alt, diag_alt_on, diag_alt_off, !!state.ignorekey, !!state.ignoreclick,
+        (int)state.action.ac, !!mousehook, !!conf.keepMousehook);
+    LOG("RDP mouse installs=%lu removes=%lu install_error=%lu remove_error=%lu watchdog_rehooks=%lu",
+        diag_mouse_install, diag_mouse_remove, diag_install_error, diag_remove_error, diag_rehook);
+    diag_kb_max = diag_mouse_max = 0;
+}
+static HHOOK DiagInstallMouse(HOOKPROC proc)
+{
+    HHOOK h = SetWindowsHookEx(WH_MOUSE_LL, proc, hinstDLL, 0);
+    DWORD err = GetLastError();
+    ++diag_mouse_install;
+    diag_install_error = h ? 0 : err;
+    SetLastError(err);
+    return h;
+}
+static BOOL DiagRemoveMouse(HHOOK h)
+{
+    BOOL ok = UnhookWindowsHookEx(h);
+    DWORD err = GetLastError();
+    ++diag_mouse_remove;
+    diag_remove_error = ok ? 0 : err;
+    SetLastError(err);
+    return ok;
+}
+
 #define FixDWMRect(hwnd, rect) FixDWMRectLL(hwnd, rect, conf.SnapGap)
 #undef GetWindowRectL
 #define GetWindowRectL(hwnd, rect) GetWindowRectLL(hwnd, rect, conf.SnapGap)
@@ -2731,7 +2784,19 @@ static HWND MDIorNOT(HWND hwnd, HWND *mdiclient_);
 #ifdef __cplusplus
 extern "C"
 #endif
+static LRESULT CALLBACK DiagKeyboardBody(int nCode, WPARAM wParam, LPARAM lParam);
 __declspec(dllexport) LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
+{
+    DWORD start = GetTickCount();
+    int was_alt = !!state.alt;
+    DiagHookEnter();
+    LRESULT ret = DiagKeyboardBody(nCode, wParam, lParam);
+    DWORD err = GetLastError();
+    DiagHookLeave(start, was_alt, &diag_kb_count, &diag_kb_max);
+    SetLastError(err);
+    return ret;
+}
+static LRESULT CALLBACK DiagKeyboardBody(int nCode, WPARAM wParam, LPARAM lParam)
 {
 #if defined(_MSC_VER) && _MSC_VER > 1300
 #pragma comment(linker, "/EXPORT:" __FUNCTION__ "=" __FUNCDNAME__)
@@ -5400,7 +5465,19 @@ static xpure enum buttonstate GetButtonState(WPARAM wp)
 #define CallNextHookEx(NULL, nCode, wParam, lParam) 0
 #endif // NO_HOOK_LL
 //
+static LRESULT CALLBACK DiagMouseBody(int nCode, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam)
+{
+    DWORD start = GetTickCount();
+    int was_alt = !!state.alt;
+    DiagHookEnter();
+    LRESULT ret = DiagMouseBody(nCode, wParam, lParam);
+    DWORD err = GetLastError();
+    DiagHookLeave(start, was_alt, &diag_mouse_count, &diag_mouse_max);
+    SetLastError(err);
+    return ret;
+}
+static LRESULT CALLBACK DiagMouseBody(int nCode, WPARAM wParam, LPARAM lParam)
 {
 //    if (state.ignoreclick) LOGA("IgnoreClick")
     // Set up some variables
@@ -5634,7 +5711,7 @@ static void HookMouse()
     #ifdef NO_HOOK_LL
     mousehook = (void*)SetTimer(g_mainhwnd, POOL_TIMER, 32, (TIMERPROC)TimerWindowProc);
     #else
-    mousehook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, hinstDLL, 0);
+    mousehook = DiagInstallMouse(LowLevelMouseProc);
     #endif
 }
 /////////////////////////////////////////////////////////////////////////////
@@ -5648,7 +5725,7 @@ static void UnhookMouseOnly()
     #ifdef NO_HOOK_LL
     KillTimer(g_mainhwnd, POOL_TIMER);
     #else
-    UnhookWindowsHookEx(mousehook);
+    DiagRemoveMouse(mousehook);
     #endif
     mousehook = NULL;
 }
@@ -5693,8 +5770,9 @@ static VOID CALLBACK TimerWindowProc(HWND hwnd, UINT msg, UINT_PTR idEvent, DWOR
         POINT pt;
         GetCursorPos(&pt); // I donot know if we should really use the ASYN version.
         if (mousehook && !SamePt(state.prevpt, pt)) {
-            UnhookWindowsHookEx(mousehook);
-            mousehook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, hinstDLL, 0);
+            ++diag_rehook;
+            DiagRemoveMouse(mousehook);
+            mousehook = DiagInstallMouse(LowLevelMouseProc);
         }
         } break;
     #endif
@@ -6220,7 +6298,7 @@ __declspec(dllexport) void WINAPI Unload()
     PostThreadMessage(g_WorkerThreadID, WM_DOWORK, 0, 0);
 
     conf.keepMousehook = 0;
-    if (mousehook) { UnhookWindowsHookEx(mousehook); mousehook = NULL; }
+    if (mousehook) { DiagRemoveMouse(mousehook); mousehook = NULL; }
     KillAllTimers();
     KillAltSnapMenu();
     if (conf.TransWinOpacity) {
